@@ -5,19 +5,18 @@
 #include <memory>
 #include <vector>
 
-const int FPS_LIMIT = 1;
+const int FPS_LIMIT = 60;
 
-const float S_TO_FRAME = FPS_LIMIT;
-const float FRAME_TO_S = 1.0f / S_TO_FRAME;
-const float M_TO_PX = 1.0f;
-const float PX_TO_M = 1.0f / M_TO_PX;
+const float M_TO_PX = 7529.f;
+const float PX_TO_M = 1.f / M_TO_PX;
 
 class Body {
 public:
   Body(float x, float y, float width, float height, float mass)
-      : x(x), y(y), width(width), height(height), mass(mass) {}
+      : x(x), y(y), width(width), height(height), mass(mass), x_force(0),
+        y_force(0), x_vel(0), y_vel(0) {}
 
-  void apply_force(float x, float y) {
+  void apply_newton_force(float x, float y) {
     x_force += x * M_TO_PX; // kg * px / s^2
     y_force += y * M_TO_PX; // kg * px / s^2
   }
@@ -25,17 +24,20 @@ public:
   void update(Uint64 delta_time_ms) {
     float delta_time_s = float(delta_time_ms) / 1000.0f;
 
-    float x_acc = x_force / mass * delta_time_s * delta_time_s;
+    // a = F / m
+    // [a] = px / s^2
+    auto x_acc = x_force / mass;
+    auto y_acc = y_force / mass;
 
-    // x_vel = M_TO_PX * delta_time_s;
-    // y_vel = 0;
-    // float y_delta = y_force * delta_time_s * delta_time_s / mass;
-    // y += y_delta;
+    // s = s0 + v0 * t + a * t^2 / 2
+    // [s] = px
+    x += (x_vel * delta_time_s) + (x_acc * delta_time_s * delta_time_s / 2);
+    y += (y_vel * delta_time_s) + (y_acc * delta_time_s * delta_time_s / 2);
 
-    y_vel += y_force / mass * delta_time_s;
-    y += y_vel * delta_time_s;
-
-    std::cout << y_vel << " " << y << std::endl;
+    // v = v0 + a * t
+    // [v] = px / s
+    x_vel += x_acc * delta_time_s;
+    y_vel += y_acc * delta_time_s;
   }
 
 public:
@@ -96,8 +98,8 @@ public:
 
     running_ = true;
 
-    bodies_.push_back(Body(100, 100, 50, 50, 1));
-    bodies_.front().apply_force(0, 10.0f);
+    bodies_.push_back(Body(0, 100, 50, 50, 1));
+    bodies_.front().apply_newton_force(0, 9.81f);
   }
   ~Game() {
     IMG_Quit();
@@ -107,7 +109,7 @@ public:
   std::unique_ptr<SDL_Window, void (*)(SDL_Window *)> build_window() {
     return std::unique_ptr<SDL_Window, void (*)(SDL_Window *)>(
         SDL_CreateWindow("First program", SDL_WINDOWPOS_CENTERED,
-                         SDL_WINDOWPOS_CENTERED, 1280, 720,
+                         SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT,
                          SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI),
         SDL_DestroyWindow);
   }
@@ -169,6 +171,12 @@ private:
     handle_keyboard_state();
 
     for (auto &body : bodies_) {
+      if (body.y > SCREEN_HEIGHT) {
+        body.y = 0;
+        body.y_vel = 0;
+        SDL_Delay(1000);
+      }
+
       body.update(delta_time_ms);
     }
   }
@@ -184,8 +192,8 @@ private:
     SDL_RenderPresent(renderer_.get());
   }
 
-  const int SCREEN_WIDTH = 1280;
-  const int SCREEN_HEIGHT = 720;
+  const int SCREEN_WIDTH = 1920;
+  const int SCREEN_HEIGHT = 1080;
   const std::string WINDOW_TITLE = "First program";
 
   bool running_;
