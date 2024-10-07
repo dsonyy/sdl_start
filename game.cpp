@@ -3,12 +3,16 @@
 #include <ctime>
 #include <iostream>
 #include <memory>
+#include <set>
 #include <vector>
 
 const int FPS_LIMIT = 60;
 
 const float M_TO_PX = 7529.f;
 const float PX_TO_M = 1.f / M_TO_PX;
+
+const int SCREEN_WIDTH = 1920;
+const int SCREEN_HEIGHT = 1080;
 
 class Body {
 public:
@@ -21,8 +25,10 @@ public:
     y_force += y * M_TO_PX; // kg * px / s^2
   }
 
-  void update(Uint64 delta_time_ms) {
+  Body update(Uint64 delta_time_ms) {
     float delta_time_s = float(delta_time_ms) / 1000.0f;
+
+    Body new_body = *this;
 
     // a = F / m
     // [a] = px / s^2
@@ -31,13 +37,32 @@ public:
 
     // s = s0 + v0 * t + a * t^2 / 2
     // [s] = px
-    x += (x_vel * delta_time_s) + (x_acc * delta_time_s * delta_time_s / 2);
-    y += (y_vel * delta_time_s) + (y_acc * delta_time_s * delta_time_s / 2);
+    new_body.x +=
+        (x_vel * delta_time_s) + (x_acc * delta_time_s * delta_time_s / 2);
+    new_body.y +=
+        (y_vel * delta_time_s) + (y_acc * delta_time_s * delta_time_s / 2);
 
     // v = v0 + a * t
     // [v] = px / s
-    x_vel += x_acc * delta_time_s;
-    y_vel += y_acc * delta_time_s;
+    new_body.x_vel += x_acc * delta_time_s;
+    new_body.y_vel += y_acc * delta_time_s;
+
+    return new_body;
+  }
+
+  SDL_Rect get_sdl_rect() const {
+    return SDL_Rect{
+        int(std::round(x)),
+        int(std::round(y)),
+        int(std::round(width)),
+        int(std::round(height)),
+    };
+  }
+
+  void redraw(SDL_Renderer *renderer) {
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 200);
+    SDL_Rect rect = get_sdl_rect();
+    SDL_RenderFillRect(renderer, &rect);
   }
 
 public:
@@ -52,25 +77,77 @@ public:
   float y_vel;
 };
 
-SDL_Rect get_sdl_rect(const Body &body) {
-  SDL_Rect rect = {
-      int(std::round(body.x)),
-      int(std::round(body.y)),
-      int(std::round(body.width)),
-      int(std::round(body.height)),
-  };
-  return rect;
-}
+class Scene {
+public:
+  virtual void update(Uint64 delta_time_ms) = 0;
+  virtual void redraw(SDL_Renderer *renderer) = 0;
+};
 
-void sdl_draw_body(SDL_Renderer *renderer, const Body &body) {
-  SDL_SetRenderDrawColor(renderer, 255, 255, 255, 200);
-  SDL_Rect rect = get_sdl_rect(body);
-  SDL_RenderFillRect(renderer, &rect);
-}
+class CollisionChecker {
+public:
+  CollisionChecker() {}
+
+  std::set<std::shared_ptr<Body>>
+  check_collisions(const std::vector<std::shared_ptr<Body>> &bodies) {
+    std::set<std::shared_ptr<Body>> colliding_bodies;
+    for (size_t i = 0; i < bodies.size(); i++) {
+      for (size_t j = i + 1; j < bodies.size(); j++) {
+        if (bodies[i]->x < bodies[j]->x + bodies[j]->width &&
+            bodies[i]->x + bodies[i]->width > bodies[j]->x &&
+            bodies[i]->y < bodies[j]->y + bodies[j]->height &&
+            bodies[i]->y + bodies[i]->height > bodies[j]->y) {
+          colliding_bodies.insert(bodies[i]);
+        }
+      }
+    }
+    return colliding_bodies;
+  }
+};
+
+class PlaygroundScene : public Scene {
+public:
+  PlaygroundScene() {
+    for (int i = 0; i < 5; i++) {
+      bodies_.push_back(std::make_shared<Body>(
+          rand() % SCREEN_WIDTH, rand() % SCREEN_HEIGHT, 50, 50, 1));
+    }
+  }
+
+  virtual void update(Uint64 delta_time_ms) {
+    auto requested_bodies = std::vector<std::shared_ptr<Body>>(bodies_.size());
+    for (size_t i = 0; i < bodies_.size(); i++) {
+      requested_bodies[i] =
+          std::make_shared<Body>(bodies_[i]->update(delta_time_ms));
+    }
+
+    auto collision_checker = CollisionChecker();
+    auto colliding_bodies =
+        collision_checker.check_collisions(requested_bodies);
+
+    for (auto &body : bodies_) {
+
+      // std::vector<std::shared_ptr<Body>> requested_bodies(bodies_.size());
+      // for (auto &body : bodies_) {
+      //   body->update(delta_time_ms);
+      // }
+    }
+  }
+
+  virtual void redraw(SDL_Renderer *renderer) {
+    for (auto &body : bodies_) {
+      body->redraw(renderer);
+    }
+  }
+
+private:
+  std::vector<std::shared_ptr<Body>> bodies_;
+};
 
 class Game {
 public:
-  Game() : window_(build_window()), renderer_(build_renderer()) {
+  Game()
+      : window_(build_window()), renderer_(build_renderer()),
+        scene_(std::make_unique<PlaygroundScene>()) {
     if (window_ == nullptr) {
       std::cout << "Error window creation";
       return;
@@ -97,10 +174,8 @@ public:
     }
 
     running_ = true;
-
-    bodies_.push_back(Body(0, 100, 50, 50, 1));
-    bodies_.front().apply_newton_force(0, 9.81f);
   }
+
   ~Game() {
     IMG_Quit();
     SDL_Quit();
@@ -170,39 +245,27 @@ private:
     handle_events();
     handle_keyboard_state();
 
-    for (auto &body : bodies_) {
-      if (body.y > SCREEN_HEIGHT) {
-        body.y = 0;
-        body.y_vel = 0;
-        SDL_Delay(1000);
-      }
-
-      body.update(delta_time_ms);
-    }
+    scene_->update(delta_time_ms);
   }
 
   void redraw() {
     SDL_SetRenderDrawColor(renderer_.get(), 0, 0, 0, 255);
     SDL_RenderClear(renderer_.get());
 
-    for (auto &body : bodies_) {
-      sdl_draw_body(renderer_.get(), body);
-    }
+    scene_->redraw(renderer_.get());
 
     SDL_RenderPresent(renderer_.get());
   }
-
-  const int SCREEN_WIDTH = 1920;
-  const int SCREEN_HEIGHT = 1080;
   const std::string WINDOW_TITLE = "First program";
 
   bool running_;
   std::unique_ptr<SDL_Window, void (*)(SDL_Window *)> window_;
   std::unique_ptr<SDL_Renderer, void (*)(SDL_Renderer *)> renderer_;
-  std::vector<Body> bodies_;
+  std::unique_ptr<Scene> scene_;
 };
 
 int main(int argc, char *argv[]) {
+  std::srand(0);
   Game game;
   game.run();
   return 0;
